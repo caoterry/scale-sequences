@@ -1,0 +1,14 @@
+{
+  "name": "scale-sequences",
+  "description": "Marketplace for the scale-sequences Claude Code skill.",
+  "owner": {
+    "name": "Terry Cao"
+  },
+  "plugins": [
+    {
+      "name": "scale-sequences",
+      "source": ".",
+      "description": "Verified Guitar Pro .gp5 practice files of scale sequences through scale boxes, in any key, optionally with half-step bends on the blue notes."
+    }
+  ]
+}

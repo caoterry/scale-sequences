@@ -1,0 +1,10 @@
+{
+  "name": "scale-sequences-verify",
+  "private": true,
+  "description": "Loads and renders a .gp5 with alphaTab (a real Guitar Pro engine) to check it against the plan.",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@coderline/alphatab": "1.8.3"
+  }
+}

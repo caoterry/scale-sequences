@@ -1,0 +1,4 @@
+# Runtime deps for skills/scale-sequences/scripts. scaleseq_cli.py pins them inline (PEP 723) and is
+# locked in scaleseq_cli.py.lock, so `uv run --locked --script` needs nothing else; tests/test_pins.py
+# keeps this file in step with that pin. Fallback without uv (Python 3.10+): pip install -r requirements.txt
+pyguitarpro==0.11

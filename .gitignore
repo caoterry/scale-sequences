@@ -1,0 +1,21 @@
+# generated exercises, previews and work dirs
+*.gp5
+*.gp
+*.tmp.gp5
+*.html
+out/
+work/
+
+# never commit reference transcriptions (book pages, reads) -- keep them outside the repo
+private/
+scans/
+*.pdf
+
+# tooling
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+.DS_Store
