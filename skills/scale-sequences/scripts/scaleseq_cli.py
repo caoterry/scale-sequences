@@ -8,7 +8,7 @@
 
   scaleseq_cli.py boxes [--key K]                      box diagrams (degree / suggested finger)
   scaleseq_cli.py patterns [--n N] [--pattern-file F]  pattern library in index notation
-  scaleseq_cli.py generate --box b7 --patterns 4s,3s:8t,1231 -o out.gp5 [--bend-blue-notes]
+  scaleseq_cli.py generate --box b7 --patterns 4s,3s:8t,1231 -o out.gp5 [--bend-blue-notes | --one-pick-bends]
               [--tempo 80] [--key A | --fret-offset N] [--title T] [--subtitle S] [--plain-markers]
               [--fingering] [--no-alphatab] [--no-render] [--force] [--json]
               [--expect-reads DIR] [--expect-gp5 FILE] [--pattern-file F]
@@ -19,8 +19,8 @@
 for this run only: {"<name>": {"shape": [0, 2, 1], "default_rhythm": "8t", ...}} (any field of
 scaleseq.patterns.Pattern; lists for its tuple fields).
 
-Every generate runs all checks (plan, read-back, alphaTab parse + render) before the file is
-moved into place; any failure exits 1 and leaves no file.
+Every generate runs all checks (plan, read-back, alphaTab parse + MIDI + render) before the file
+is moved into place; any failure exits 1 and leaves no file.
 """
 
 from __future__ import annotations
@@ -66,8 +66,8 @@ def cmd_patterns(a) -> int:
 def cmd_generate(a) -> int:
     box = get_box(a.box, key=a.key, fret_offset=a.fret_offset)
     sections = resolve_sections(a.patterns.split(","))
-    rep = generate(box, a.out, sections=sections, bend_blue=a.bend_blue_notes, tempo=a.tempo,
-                   title=a.title, subtitle=a.subtitle or "",
+    rep = generate(box, a.out, sections=sections, bend_blue=a.bend_blue_notes, one_pick_bends=a.one_pick_bends,
+                   tempo=a.tempo, title=a.title, subtitle=a.subtitle or "",
                    marker_fmt="{label}" if a.plain_markers else "{label} ({shape})",
                    fingering=a.fingering, alphatab=not a.no_alphatab, render=not a.no_render,
                    force=a.force, expect_reads=a.expect_reads, expect_gp5=a.expect_gp5)
@@ -75,7 +75,8 @@ def cmd_generate(a) -> int:
         print(json.dumps({k: v for k, v in rep.items() if k != "plan"}, indent=1))
         return 0
     print(f"OK {rep['out']}\n  {rep['label']} ({rep['key']}), {rep['bars']} bars, {rep['notes']} notes, "
-          f"{rep['bends']} half-step bends")
+          f"{rep['picks']} picks, {rep['bends']} half-step bends"
+          + (f" ({rep['releases']} released)" if rep["releases"] else ""))
     for s in rep["sections"]:
         print(f"  {s['label']}: {s['pattern']} in {s['rhythm']}, {s['bars']} bars, {s['notes']} notes")
     for k, v in rep["checks"].items():
@@ -127,8 +128,12 @@ def main(argv=None) -> int:
         g.add_argument("-o", "--out", required=True)
         g.add_argument("--patterns", required=True,
                        help="comma list of pattern[:rhythm], one section each in this order, e.g. 4s,3s:8t")
-        g.add_argument("--bend-blue-notes", action="store_true",
-                       help="play every blue note (b5) as a half-step bend from the fret below")
+        bends = g.add_mutually_exclusive_group()
+        bends.add_argument("--bend-blue-notes", action="store_true",
+                           help="play every blue note (b5) as a half-step bend from the fret below, each picked")
+        bends.add_argument("--one-pick-bends", action="store_true",
+                           help="half-step bends with one pick per bend: up = pick, tied bend into the next "
+                                "note; down = picked pre-bend, tied release (e.g. the plain scale)")
         g.add_argument("--tempo", type=int, default=80)
         g.add_argument("--title")
         g.add_argument("--subtitle")
@@ -139,7 +144,7 @@ def main(argv=None) -> int:
         g.add_argument("--force", action="store_true", help="replace an existing output file")
         g.add_argument("--json", action="store_true")
         g.add_argument("--expect-reads", help="fail unless note-for-note equal to these reads")
-        g.add_argument("--expect-gp5", help="fail unless equal to this .gp5 (bent blue notes excepted)")
+        g.add_argument("--expect-gp5", help="fail unless equal to this .gp5 (the notes the run bends excepted)")
     a = ap.parse_args(argv)
     try:
         if getattr(a, "pattern_file", None):

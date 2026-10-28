@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 // alphatab_check.mjs -- load a .gp5 with alphaTab (the engine woodshed and many web players use)
 // and print, as JSON, what alphaTab itself parsed: bars, time signatures, markers, every beat
-// (rest/empty, duration, tuplet) and note (GP string number, fret, sounding pitch incl. bend).
+// (rest/empty, duration, tuplet) and note (GP string number, fret, tie, bend type and points, pitch
+// at the end of the note incl. bend), and the MIDI alphaTab's player generates from it (note-ons,
+// note-offs and per-note pitch bends in half steps, by tick).
 // With --render it also renders the score (default notation + tab) to SVG in Node and reports which
 // beats carry a bend label ("½", "full", ...), by alphaTab's own beat ids.
 //
@@ -10,7 +12,9 @@
 // (music font embedded) for eyeballing.
 //
 // usage: node alphatab_check.mjs <alphaTab.mjs> <file.gp5> [--render] [--html OUT.html]
-// Exits 1 (message on stderr) if alphaTab throws.
+// Exits 1 (message on stderr) if alphaTab throws, or if its MIDI does not set exactly one pitch-bend
+// range. alphaTab's own warnings go to stderr (e.g. "Unsupported bend type detected, fallback to custom"
+// for every 4-point bend, which is what keeps that bend's shape).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -41,11 +45,12 @@ const bars = staff.bars.map((bar, bi) => ({
       id: b.id, isEmpty: b.isEmpty, isRest: b.isRest, duration: b.duration,
       tuplet: [b.tupletNumerator, b.tupletDenominator],
       notes: b.notes.map((n) => {
-        const maxBend = n.hasBend ? Math.max(...n.bendPoints.map((p) => p.value)) : 0;
+        const points = n.hasBend ? n.bendPoints.map((p) => [p.offset, p.value]) : [];  // offset 0-60, quarter tones
+        const maxBend = points.length ? Math.max(...points.map((p) => p[1])) : 0;
         return {
           string: nStrings - n.string + 1, fret: n.fret, realValue: n.realValue,
-          bendType: n.bendType, maxBendQuarterTones: maxBend,
-          sounding: n.realValue + maxBend / 2,
+          tie: n.isTieDestination, bendType: n.bendType, bendPoints: points, maxBendQuarterTones: maxBend,
+          soundingEnd: n.realValue + (points.length ? points[points.length - 1][1] : 0) / 2,
           velocity: n.dynamics,
         };
       }),
@@ -62,7 +67,30 @@ const out = {
     marker: mb.section ? mb.section.text : null, doubleBar: mb.isDoubleBar,
   })),
   bars,
+  midi: midiDump(),
 };
+
+// The MIDI alphaTab's player plays (AlphaSynthMidiFileHandler in its default per-note-bend mode).
+// Pitch bends are converted to half steps with the bend range alphaTab itself sets (RPN 0 data entry).
+function midiDump() {
+  const midi = new at.midi.MidiFile();
+  new at.midi.MidiFileGenerator(score, settings, new at.midi.AlphaSynthMidiFileHandler(midi)).generate();
+  const T = at.midi.MidiEventType;
+  const ranges = new Set(midi.events.filter((e) => e.type === T.ControlChange
+    && e.controller === at.midi.ControllerType.DataEntryCoarse).map((e) => e.value));
+  if (ranges.size !== 1) {
+    console.error(`ALPHATAB MIDI: expected one pitch-bend range, got ${[...ranges]}`);
+    process.exit(1);
+  }
+  const [range] = ranges;
+  const names = { [T.NoteOn]: "NoteOn", [T.NoteOff]: "NoteOff", [T.PerNotePitchBend]: "NoteBend", [T.PitchBend]: "PitchBend" };
+  const events = midi.events.filter((e) => e.type in names).map((e) => ({
+    type: names[e.type], tick: e.tick, channel: e.channel, key: e.type === T.PitchBend ? null : e.noteKey,
+    semitones: e.type === T.PerNotePitchBend ? (e.value - 2 ** 31) / (2 ** 31 / range)
+      : e.type === T.PitchBend ? (e.value - 8192) / (8192 / range) : null,
+  }));
+  return { division: midi.division, bendRangeSemitones: range, events };
+}
 
 if (doRender) {
   settings.core.engine = "svg";

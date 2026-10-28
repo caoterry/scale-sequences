@@ -43,27 +43,32 @@ def resolve_sections(patterns: list[str]) -> list[Section]:
 
 
 def check_against_reference_gp5(new: str, ref: str, plan: list[dict]) -> list[str]:
-    """`new` must equal `ref` beat for beat, except that a note the plan bends may be written one
-    fret lower (same string) with a half-step bend where `ref` has the unbent blue note."""
+    """`new` must equal `ref` beat for beat, except where the plan bends a note: there `ref` has the
+    note unbent and `new` has it on the same string with a half-step bend that ends where `ref`'s note
+    sounds -- one fret lower if the bend ends up a half step (a bend up or a pre-bend), on the same fret
+    if it ends released."""
     probs = []
     shape_new = read_plan_shape(new)["bars"]
     for d in diff_gp5(ref, new):
         if len(d) == 5 and d[2] == "notes":
             k, j, _, a, b = d
             pb = plan[k - 1]["beats"][j - 1]
-            ok = (len(a) == len(b) == 1 and pb.get("bend") == 2 and a[0]["bend"] == 0 and b[0]["bend"] == 2
-                  and b[0]["string"] == a[0]["string"] and b[0]["fret"] == a[0]["fret"] - 1)
+            ends = b[0]["bend_points"][-1][1] if len(b) == 1 and b[0]["bend_points"] else None  # quarter tones
+            ok = (len(a) == len(b) == 1 and pb.get("bend_kind") and not a[0]["bend"] and not a[0]["tie"]
+                  and b[0]["bend"] == 2 and ends in (0, 2) and b[0]["string"] == a[0]["string"]
+                  and b[0]["fret"] == a[0]["fret"] - ends // 2)
             if ok:
                 continue
         probs.append(f"differs from reference: {d}")
     n_bent = sum(1 for bar in shape_new for x in bar["beats"] for n in x["notes"] if n["bend"])
-    n_plan = sum(1 for bar in plan for x in bar["beats"] if not x["rest"] and x["bend"])
+    n_plan = sum(1 for bar in plan for x in bar["beats"] if not x["rest"] and x["bend_kind"])
     if n_bent != n_plan:
         probs.append(f"{n_bent} bent notes in file, plan has {n_plan}")
     return probs
 
 
-def generate(box: Box | str, out: str, *, sections: list[Section], bend_blue: bool = False, tempo: int = 80,
+def generate(box: Box | str, out: str, *, sections: list[Section], bend_blue: bool = False,
+             one_pick_bends: bool = False, tempo: int = 80,
              title: str | None = None, subtitle: str = "", marker_fmt: str = "{label} ({shape})",
              fingering: bool = False, alphatab: bool = True, render: bool = True, force: bool = False,
              expect_reads: str | None = None, expect_gp5: str | None = None) -> dict:
@@ -74,10 +79,13 @@ def generate(box: Box | str, out: str, *, sections: list[Section], bend_blue: bo
         raise FileExistsError(f"{out} exists (use --force to replace it)")
     title = title or f"{box.key} {box.scale.replace('-', ' ')} sequences ({box.label})"
     bars = build_bars(sections, box.n)
-    plan = realize(bars, box, bend_blue=bend_blue, marker_fmt=marker_fmt)
+    plan = realize(bars, box, bend_blue=bend_blue, one_pick_bends=one_pick_bends, marker_fmt=marker_fmt)
+    played = [x for b in plan for x in b["beats"] if not x["rest"]]
     report: dict = {"box": box.id, "label": box.label, "key": box.key, "n_box_notes": box.n,
-                    "bars": len(plan), "notes": sum(1 for b in plan for x in b["beats"] if not x["rest"]),
-                    "bends": sum(1 for b in plan for x in b["beats"] if not x["rest"] and x["bend"]),
+                    "bars": len(plan), "notes": len(played),
+                    "picks": sum(1 for x in played if not x["tie"]),
+                    "bends": sum(1 for x in played if x["bend_kind"] in ("bend", "prebend")),
+                    "releases": sum(1 for x in played if x["bend_kind"] == "release"),
                     "sections": [{"label": s.label, "pattern": s.pat().name,
                                   "rhythm": s.note_dur().key,
                                   "bars": len(sbars),
@@ -85,8 +93,9 @@ def generate(box: Box | str, out: str, *, sections: list[Section], bend_blue: bo
                                   "index_notation": s.pat().notation(box.n)}
                                  for s, sbars in zip(sections, split_sections(plan))],
                     "checks": {}}
-    probs = check_plan(plan, box, sections, bend_blue=bend_blue)
-    report["checks"]["plan (bar fill, pitch class, in-box, bends, pattern, rhythm)"] = probs or "ok"
+    probs = check_plan(plan, box, sections, bend_blue=bend_blue, one_pick_bends=one_pick_bends)
+    report["checks"]["plan (bar fill, pitch class, in-box, bends" + (", one pick per bend" if one_pick_bends else "")
+                     + ", pattern, rhythm)"] = probs or "ok"
     if expect_reads:
         p2 = compare_reads(plan, expect_reads)
         report["checks"]["note-for-note vs reference reads"] = p2 or "ok"
@@ -106,7 +115,8 @@ def generate(box: Box | str, out: str, *, sections: list[Section], bend_blue: bo
         if alphatab:
             p4, dump = check_alphatab(str(tmp), plan, title=title, tempo=tempo, render=render)
             report["alphatab_version"] = dump.get("version")
-            report["checks"]["alphaTab parse" + (" + render (bend labels)" if render else "")] = p4 or "ok"
+            report["checks"]["alphaTab parse + MIDI (picks, bend timing)"
+                             + (" + render (bend labels)" if render else "")] = p4 or "ok"
             if render:
                 report["render_bend_labels"] = len(dump["render"]["bendLabels"])
             p3 = p3 + p4

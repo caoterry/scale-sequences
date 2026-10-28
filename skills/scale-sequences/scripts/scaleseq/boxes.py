@@ -55,6 +55,20 @@ class Position:
 
 
 @dataclass(frozen=True)
+class BendPair:
+    """Two adjacent box notes a half step apart, played as ONE fret: the lower note on its own fret, the
+    upper one by bending that fret up a half step (the upper note's own fret is not played)."""
+    lower: int      # box index of the lower note
+    upper: int      # box index of the upper note (lower + 1)
+    string: int
+    fret: int       # the lower note's fret, the one that is picked and bent
+    finger: int     # the finger that bends it
+
+
+FINGER_NAMES = {1: "index", 2: "middle", 3: "ring", 4: "little"}
+
+
+@dataclass(frozen=True)
 class Box:
     id: str
     label: str
@@ -94,6 +108,23 @@ class Box:
                 return q
         raise BoxError(f"{self.label}: no box note one fret below {note_name(p.pitch)} "
                        f"(string {p.string} fret {p.fret}) to bend from")
+
+    def bend_pairs(self) -> list[BendPair]:
+        """The pair each blue note is bent in, one pick per bend, by the box's fingering. If the blue
+        note's string also holds the notes a fret below and a fret above it (e.g. D-D#-E, fingers
+        1-2-3), the blue note is bent up to the note above; otherwise the note a fret below is bent up
+        to the blue note. The bend is never the index or the little finger's."""
+        pairs = []
+        for i in self.blue_indices():
+            p, below = self.positions[i], self.bend_source(i)
+            above = next((q for q in self.positions if q.string == p.string and q.fret == p.fret + 1), None)
+            lower = p if above is not None else below
+            j = self.positions.index(lower)  # the upper note is j + 1: one position per pitch, no gaps
+            if lower.finger not in (2, 3):
+                raise BoxError(f"{self.label}: the bend at string {lower.string} fret {lower.fret} would be "
+                               f"the {FINGER_NAMES[lower.finger]} finger's (only middle or ring bend)")
+            pairs.append(BendPair(j, j + 1, lower.string, lower.fret, lower.finger))
+        return pairs
 
     def diagram(self) -> str:
         lo, hi = self.fret_span()

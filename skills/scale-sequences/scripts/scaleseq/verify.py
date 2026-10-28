@@ -4,7 +4,9 @@ anything -- every claim is a comparison against the plan, the box, or the patter
 
 from __future__ import annotations
 
+import bisect
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -12,15 +14,30 @@ from fractions import Fraction
 from pathlib import Path
 
 from .boxes import Box
-from .exercise import Section
-from .gp5 import read_plan_shape
-from .theory import fret_pitch, scale_pcs
+from .exercise import BEND_SHAPES, Section, ends_bent
+from .gp5 import BEND_POINTS, BEND_TYPES, read_plan_shape
+from .theory import fret_pitch, note_name, scale_pcs
 
 HERE = Path(__file__).resolve().parent.parent
+
+# alphaTab's BendType after it loads a note (Note.finish): a 4-point bend whose middle values differ stays
+# 1 = Custom, i.e. played as written; a held pre-bend is 6 = Prebend.
+ALPHATAB_BEND_TYPE = {None: 0, "bend": 1, "prebend": 6, "release": 1}
+# A bend or a release reaches its target within this fraction of its note (BEND_POINTS: 2/12), then holds.
+REACH = Fraction(1, 6)
 
 
 def _beats(b: dict) -> Fraction:
     return Fraction(4, b["value"]) * Fraction(b["tuplet"][1], b["tuplet"][0])
+
+
+def _shape(b: dict) -> tuple[int, int]:
+    """Half steps above the fret's own pitch at the start and the end of a note."""
+    return BEND_SHAPES[b["bend_kind"]] if b["bend_kind"] else (0, 0)
+
+
+def sounding_end(b: dict) -> int:
+    return fret_pitch(b["string"], b["fret"]) + _shape(b)[1]
 
 
 def split_sections(plan: list[dict]) -> list[list[dict]]:
@@ -35,9 +52,13 @@ def split_sections(plan: list[dict]) -> list[list[dict]]:
     return out
 
 
-def check_plan(plan: list[dict], box: Box, sections: list[Section], *, bend_blue: bool) -> list[str]:
-    """Bar fill, pitch class, in-box, bends, and pattern/rhythm of every section."""
+def check_plan(plan: list[dict], box: Box, sections: list[Section], *, bend_blue: bool = False,
+               one_pick_bends: bool = False) -> list[str]:
+    """Bar fill, pitch class, in-box, bends (none, blue-note bends, or one pick per bend -- whichever the
+    plan was asked for), and pattern/rhythm of every section."""
     probs = []
+    if bend_blue and one_pick_bends:
+        probs.append("both blue-note bends and one-pick bends asked for")
     pcs = scale_pcs(box.scale, box.root_pc)
     by_sf = box.index_of_sf()
     blue = set(box.blue_indices())
@@ -50,19 +71,30 @@ def check_plan(plan: list[dict], box: Box, sections: list[Section], *, bend_blue
             if b["rest"]:
                 continue
             i = b["idx"]
-            sounding = fret_pitch(b["string"], b["fret"]) + b["bend"] // 2
+            if b["bend_kind"] not in (None, *BEND_SHAPES) or b["bend"] != (2 if b["bend_kind"] else 0):
+                probs.append(f"bar {k}: bend {b['bend']} / {b['bend_kind']!r} is not a half-step bend")
+                continue
+            sounding = sounding_end(b)
             if sounding != b["pitch"] or sounding != box.positions[i].pitch:
-                probs.append(f"bar {k}: s{b['string']}f{b['fret']} bend {b['bend']} sounds {sounding}, "
+                probs.append(f"bar {k}: s{b['string']}f{b['fret']} {b['bend_kind'] or 'unbent'} sounds {sounding}, "
                              f"box index {i} is {box.positions[i].pitch}")
             if sounding % 12 not in pcs:
                 probs.append(f"bar {k}: pitch class {sounding % 12} not in {box.key} {box.scale}")
             if (b["string"], b["fret"]) not in by_sf:
                 probs.append(f"bar {k}: s{b['string']}f{b['fret']} is not a position of the {box.label}")
+            elif b["finger"] != box.positions[by_sf[b["string"], b["fret"]]].finger:
+                probs.append(f"bar {k}: s{b['string']}f{b['fret']} finger {b['finger']}, the {box.label} "
+                             f"fingers it with {box.positions[by_sf[b['string'], b['fret']]].finger}")
+            if one_pick_bends:
+                continue  # _check_one_pick
             should_bend = bend_blue and i in blue
-            if bool(b["bend"]) != should_bend or (b["bend"] and b["bend"] != 2):
-                probs.append(f"bar {k}: idx {i} bend={b['bend']} but blue-note bend expected={should_bend}")
-            if b["bend"] and box.bend_source(i).sf != (b["string"], b["fret"]):
+            if bool(b["bend_kind"]) != should_bend or b["tie"] or b["bend_kind"] not in (None, "bend"):
+                probs.append(f"bar {k}: idx {i} {b['bend_kind'] or 'unbent'}{' tied' if b['tie'] else ''} "
+                             f"but blue-note bend expected={should_bend}")
+            if b["bend"] and i in blue and box.bend_source(i).sf != (b["string"], b["fret"]):
                 probs.append(f"bar {k}: bent note s{b['string']}f{b['fret']} is not the fret below the blue note")
+    if one_pick_bends:
+        probs += _check_one_pick(plan, box)
     groups = split_sections(plan)
     if [g[0]["section_index"] for g in groups] != list(range(len(groups))):
         probs.append(f"section order in the plan {[g[0]['section_index'] for g in groups]}: "
@@ -100,6 +132,73 @@ def check_plan(plan: list[dict], box: Box, sections: list[Section], *, bend_blue
     return probs
 
 
+def _check_one_pick(plan: list[dict], box: Box) -> list[str]:
+    """One pick per bend, from the box's bend pairs and the rules alone (not by re-running the planner):
+    two adjacent notes of a pair (no rest between) are one picked note -- going up the upper note is the
+    lower one tied and bent up, going down the lower note is tied and releases the upper one, which is
+    bent (a picked pre-bend, or the bend of the way up); a pair's upper note is never played on its own
+    fret; a tie continues the note before it on the same fret and pitch, inside its section; a pre-bend
+    is released, and does not come right after a note on its own string; a bend is never picked again
+    (also across a section's double bar: only a rest separates notes); nothing is bent off a pair's
+    fret, or with the index or little finger."""
+    probs = []
+    pairs = box.bend_pairs()
+    up = {(p.lower, p.upper): p for p in pairs}
+    down = {(p.upper, p.lower): p for p in pairs}
+    upper_pair = {p.upper: p for p in pairs}
+    pair_frets = {(p.string, p.fret) for p in pairs}
+
+    def name(i: int) -> str:
+        return note_name(box.positions[i].pitch)
+
+    beats = [(f"bar {k} beat {j}", bar["section_index"], b)
+             for k, bar in enumerate(plan, 1) for j, b in enumerate(bar["beats"], 1)]
+    for n, (where, sec, b) in enumerate(beats):
+        if b["rest"]:
+            continue
+        before = beats[n - 1][2] if n and not beats[n - 1][2]["rest"] else None  # the note heard just before
+        prev = before if before is not None and beats[n - 1][1] == sec else None   # ... in this section
+        nxt = beats[n + 1][2] if n + 1 < len(beats) and not beats[n + 1][2]["rest"] and beats[n + 1][1] == sec \
+            else None
+        i, kind, sf = b["idx"], b["bend_kind"], (b["string"], b["fret"])
+        if b["tie"]:
+            if prev is None or (prev["string"], prev["fret"]) != sf:
+                probs.append(f"{where}: a tie to {'no note' if prev is None else 'another string or fret'}")
+            elif kind not in ("bend", "release"):
+                probs.append(f"{where}: a tie with no bend up or release")
+            elif _shape(prev)[1] != _shape(b)[0]:
+                probs.append(f"{where}: the tie starts {_shape(b)[0]} half steps up, the note before "
+                             f"ends {_shape(prev)[1]}")
+        else:
+            if kind in ("bend", "release"):
+                probs.append(f"{where}: {name(i)} is a {kind} picked again (one pick per bend: a tied note)")
+            if before is not None and ends_bent(before) and (before["string"], before["fret"]) == sf:
+                probs.append(f"{where}: {name(i)} picks the bend held from the note before again")
+            elif kind == "prebend" and before is not None and before["string"] == b["string"]:
+                probs.append(f"{where}: the pre-bend {name(i)} comes right after a note on the same string")
+        if kind and b["finger"] not in (2, 3):
+            probs.append(f"{where}: bent with finger {b['finger']} (only middle or ring bend)")
+        if kind == "prebend" and not (nxt and nxt["tie"] and nxt["bend_kind"] == "release"):
+            probs.append(f"{where}: the pre-bend {name(i)} is not released by a tied note")
+        if kind and sf not in pair_frets:
+            probs.append(f"{where}: bent on s{sf[0]}f{sf[1]}, which is not the fret of a bend pair")
+        if i in upper_pair and sf == box.positions[i].sf:
+            p = upper_pair[i]
+            probs.append(f"{where}: {name(i)} is played on its own fret (s{sf[0]}f{sf[1]}); one pick per "
+                         f"bend plays it by bending s{p.string}f{p.fret}")
+        if prev is not None:
+            pair = (prev["idx"], i)
+            if pair in up and not (b["tie"] and kind == "bend"):
+                probs.append(f"{where}: {name(i)} follows {name(prev['idx'])} but is picked again, not "
+                             "tied and bent up from it")
+            if pair in down and not (b["tie"] and kind == "release"):
+                probs.append(f"{where}: {name(i)} follows {name(prev['idx'])} but is picked again, not "
+                             "tied and released from it")
+            if b["tie"] and pair not in up and pair not in down:
+                probs.append(f"{where}: a tie from {name(prev['idx'])} to {name(i)}, not a bend pair")
+    return probs
+
+
 def check_readback(path: str, plan: list[dict], *, title: str, tempo: int, fingering: bool) -> list[str]:
     """Parse the written file (pyguitarpro) and compare with the plan exactly."""
     got = read_plan_shape(path)
@@ -115,17 +214,16 @@ def check_readback(path: str, plan: list[dict], *, title: str, tempo: int, finge
         if g["other_voices"] != [[("empty", g["bar_time"])]]:
             probs.append(f"bar {k}: voice 2 is not one empty full-bar beat: {g['other_voices']}")
         gb = [(x["rest"], x["value"], x["tuplet"],
-               [(n["string"], n["fret"], n["bend"], n["finger"] if fingering else -1) for n in x["notes"]])
+               [(n["string"], n["fret"], n["finger"] if fingering else -1, n["tie"], n["bend"], n["bend_type"],
+                 n["bend_points"]) for n in x["notes"]])
               for x in g["beats"]]
-        pb = [(x["rest"], x["value"], x["tuplet"],
-               [] if x["rest"] else [(x["string"], x["fret"], x["bend"], x["finger"] if fingering else -1)])
+        pb = [(x["rest"], x["value"], x["tuplet"], [] if x["rest"] else [
+               (x["string"], x["fret"], x["finger"] if fingering else -1, x["tie"], x["bend"],
+                BEND_TYPES[x["bend_kind"]].name if x["bend_kind"] else None,
+                list(BEND_POINTS[x["bend_kind"]]) if x["bend_kind"] else [])])
               for x in p["beats"]]
         if gb != pb:
             probs.append(f"bar {k}: read back {gb}\n   plan {pb}")
-        for x in g["beats"]:
-            for n in x["notes"]:
-                if n["bend"] and n["bend_type"] != "bend":
-                    probs.append(f"bar {k}: bend type {n['bend_type']}")
     return probs
 
 
@@ -150,8 +248,9 @@ def alphatab_dump(path: str, render: bool = True) -> dict:
 
 
 def check_alphatab(path: str, plan: list[dict], *, title: str, tempo: int, render: bool = True) -> tuple[list[str], dict]:
-    """alphaTab's own parse vs the plan: bars, time signatures, markers, every beat and note, the
-    sounding pitch of every note (fret + bend), and (render) bend labels on exactly the bent notes."""
+    """alphaTab's own parse vs the plan: bars, time signatures, markers, every beat and note (string,
+    fret, tie, bend type and points as written, pitch at the end of the note), the MIDI alphaTab plays
+    (check_midi), and (render) ½ labels on exactly the notes that bend up or are pre-bent."""
     d = alphatab_dump(path, render=render)
     probs = []
     if d["title"] != title or d["tempo"] != tempo or d["tracks"] != 1:
@@ -175,13 +274,22 @@ def check_alphatab(path: str, plan: list[dict], *, title: str, tempo: int, rende
                 probs.append(f"bar {k + 1} beat {j + 1}: alphaTab rest/dur/tuplet "
                              f"{a['isRest'], a['duration'], tup} vs {b['rest'], b['value'], b['tuplet']}")
             want = [] if b["rest"] else [(b["string"], b["fret"], b["bend"], b["pitch"])]
-            got = [(n["string"], n["fret"], n["maxBendQuarterTones"], n["sounding"]) for n in a["notes"]]
+            got = [(n["string"], n["fret"], n["maxBendQuarterTones"], n["soundingEnd"]) for n in a["notes"]]
             if got != want:
                 probs.append(f"bar {k + 1} beat {j + 1}: alphaTab notes {got} vs plan {want}")
-            if not b["rest"] and b["bend"]:
+                continue
+            if b["rest"]:
+                continue
+            n, kind = a["notes"][0], b["bend_kind"]
+            if n["tie"] != b["tie"]:
+                probs.append(f"bar {k + 1} beat {j + 1}: alphaTab tie={n['tie']}, plan tie={b['tie']}")
+            points = [[5 * pos, val] for pos, val in BEND_POINTS[kind]] if kind else []  # alphaTab offsets 0-60
+            if n["bendType"] != ALPHATAB_BEND_TYPE[kind] or n["bendPoints"] != points:
+                probs.append(f"bar {k + 1} beat {j + 1}: alphaTab bend type {n['bendType']} points {n['bendPoints']}, "
+                             f"plan {kind} = type {ALPHATAB_BEND_TYPE[kind]} points {points}")
+            if kind in ("bend", "prebend"):
                 bent_where.add((k, 0, j))
-                if a["notes"][0]["bendType"] != 2:  # alphaTab BendType.Bend
-                    probs.append(f"bar {k + 1} beat {j + 1}: alphaTab bend type {a['notes'][0]['bendType']}")
+    probs += check_midi(d["midi"], plan)
     if render:
         labels = d["render"]["bendLabels"]
         got_where = [tuple(x["where"]) if x["where"] else None for x in labels]
@@ -189,8 +297,85 @@ def check_alphatab(path: str, plan: list[dict], *, title: str, tempo: int, rende
             probs.append(f"render: bend labels other than ½: {sorted({x['text'] for x in labels})}")
         if None in got_where or len(got_where) != len(set(got_where)) or set(got_where) != bent_where:
             probs.append(f"render: ½ labels on {len(labels)} beats {sorted(w for w in got_where if w)[:6]}..., "
-                         f"bent notes {len(bent_where)}")
+                         f"notes bent up or pre-bent {len(bent_where)}")
     return probs, d
+
+
+def check_midi(midi: dict, plan: list[dict]) -> list[str]:
+    """The MIDI alphaTab plays (alphatab_check.mjs `midi`: events in alphaTab's order, per-note bends in
+    half steps) vs the plan: one note-on per pick (tied notes are not picked), at the pick's tick and
+    fret's key, held to the end of its last tied note; and, beat by beat, that note's bend: it starts at
+    the plan's value (for the picked note, also the value set before its note-on), reaches the target
+    within REACH of the beat, holds it to the beat's end and never leaves the range between the two.
+    No channel-wide pitch bends."""
+    div = midi["division"]
+    ev = sorted(midi["events"], key=lambda e: e["tick"])  # stable: alphaTab's order within a tick
+    bends: dict[tuple, tuple[list, list, list]] = {}  # (channel, key) -> NoteBend event indices, ticks, values
+    offs: dict[tuple, tuple[list, list]] = {}         # (channel, key) -> NoteOff event indices, ticks
+    for n, e in enumerate(ev):
+        if e["type"] == "NoteBend":
+            for col, x in zip(bends.setdefault((e["channel"], e["key"]), ([], [], [])), (n, e["tick"], e["semitones"])):
+                col.append(x)
+        elif e["type"] == "NoteOff":
+            for col, x in zip(offs.setdefault((e["channel"], e["key"]), ([], [])), (n, e["tick"])):
+                col.append(x)
+    probs = []
+    if any(e["type"] == "PitchBend" for e in ev):
+        probs.append("alphaTab MIDI: channel pitch bends (bends must be per note)")
+    picks: list[dict] = []
+    t = Fraction(0)
+    for k, bar in enumerate(plan, 1):
+        for j, b in enumerate(bar["beats"], 1):
+            d = _beats(b) * div
+            if not b["rest"]:
+                beat = (f"bar {k} beat {j}", t, t + d, _shape(b))
+                if b["tie"] and picks:
+                    picks[-1]["beats"].append(beat)
+                    picks[-1]["end"] = t + d
+                else:
+                    picks.append({"key": fret_pitch(b["string"], b["fret"]), "start": t, "end": t + d,
+                                  "beats": [beat]})
+            t += d
+    ons = [(n, e) for n, e in enumerate(ev) if e["type"] == "NoteOn"]
+    if len(ons) != len(picks):
+        return probs + [f"alphaTab MIDI: {len(ons)} note-ons, plan has {len(picks)} picks"]
+    for p, (n, on) in zip(picks, ons):
+        where = p["beats"][0][0]
+        if (on["tick"], on["key"]) != (p["start"], p["key"]):
+            probs.append(f"{where}: alphaTab note-on key {on['key']} at tick {on['tick']}, "
+                         f"plan key {p['key']} at tick {p['start']}")
+            continue
+        note = (on["channel"], on["key"])
+        off_idx, off_ticks = offs.get(note, ([], []))
+        m = bisect.bisect_right(off_idx, n)
+        off = off_ticks[m] if m < len(off_idx) else None
+        if off != p["end"]:
+            probs.append(f"{where}: alphaTab note-off at tick {off}, plan {p['end']} (the end of its last tied note)")
+        idx, ticks, vals = bends.get(note, ([], [], []))
+        m = bisect.bisect_left(idx, n)
+        if abs((vals[m - 1] if m else 0) - p["beats"][0][3][0]) > 1e-9:  # the bend set before the note-on
+            probs.append(f"{where}: alphaTab picks it bent {vals[m - 1] if m else 0} half steps, "
+                         f"plan {p['beats'][0][3][0]}")
+
+        def at(tick: Fraction) -> float:  # the bend in effect at `tick`: the last event at or before it
+            m = bisect.bisect_right(ticks, tick)
+            return vals[m - 1] if m else 0
+
+        for beat, start, end, (v0, v1) in p["beats"]:
+            reach = start + math.ceil((end - start) * REACH)
+            lo, mid, hi = (bisect.bisect_left(ticks, x) for x in (start, reach, end))
+            inside = [(int(ticks[x] - start), round(vals[x], 3)) for x in range(lo, hi)]  # (tick, half steps)
+            if abs(at(start) - v0) > 1e-9:
+                probs.append(f"{beat}: alphaTab bend starts at {at(start)} half steps, plan {v0}")
+            if abs(at(reach) - v1) > 1e-9:
+                probs.append(f"{beat}: alphaTab bend is {at(reach):.3f} half steps at {REACH} of the note, "
+                             f"plan {v1}: it reaches its target late or never ({inside})")
+            elif any(abs(vals[x] - v1) > 1e-9 for x in range(mid, hi)):
+                probs.append(f"{beat}: alphaTab bend leaves {v1} half steps after reaching it: a bend holds "
+                             f"its target to the end of the note ({inside})")
+            if any(not min(v0, v1) - 1e-9 <= v <= max(v0, v1) + 1e-9 for _, v in inside):
+                probs.append(f"{beat}: alphaTab bend goes outside {v0}..{v1} half steps ({inside})")
+    return probs
 
 
 # ---------- comparisons with an existing reference ----------

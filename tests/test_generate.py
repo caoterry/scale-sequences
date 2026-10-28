@@ -48,8 +48,9 @@ def test_bend_blue_notes_on_known_exercise(mini_box, tmp_path):
         for beat in meas.voices[0].beats:
             for n in beat.notes:
                 bend = n.effect.bend
-                if bend:
-                    assert bend.type == gp.BendType.bend and max(p.value for p in bend.points) == 2
+                if bend:  # up a half step within 2/12 of the note, then held (4 points, middles differ)
+                    assert bend.type == gp.BendType.bend
+                    assert [(p.position, p.value) for p in bend.points] == [(0, 0), (1, 0), (2, 2), (12, 2)]
                 row.append((n.string, n.value, bend is not None))
         got.append(row)
     assert got == want

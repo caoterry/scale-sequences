@@ -5,9 +5,13 @@
   full length. A zero-beat voice crashes alphaTab; a *rest*-status filler draws a stray rest in
   every bar.
 - no note velocity is written (alphaTab draws a dynamic mark for any explicit one).
-- half-step bend = GP BendType.bend, points (0,0) (3,2) (12,2) in pyguitarpro units
-  (position 0-12, value in quarter tones; file stores 50 = one semitone), i.e. pick the lower note
-  and bend it up a half step early in the note, then hold.
+- half-step bends (BEND_POINTS, in pyguitarpro units: position 0-12, value in quarter tones; the file
+  stores 50 = one semitone) reach their target within 2/12 of the note, then hold. A bend that moves
+  has exactly 4 points whose two middle values differ: alphaTab turns a 2-4 point bend that only rises
+  or only falls into a straight ramp across the whole note (the target only sounds at the note's end)
+  unless it has 4 points with different middle values; its GP7 writer drops bends of more than 4
+  points; and a middle value of 1 quarter tone draws a stray "1/4" label.
+- a note that continues the note before it (no pick) is a GP tie note.
 """
 
 from __future__ import annotations
@@ -20,10 +24,16 @@ from .theory import MAJOR_KEY_SHARPS, STANDARD_TUNING
 _KEYSIG: dict[tuple[int, int], m.KeySignature] = {ks.value: ks for ks in m.KeySignature}
 _FINGER = {1: m.Fingering.index, 2: m.Fingering.middle, 3: m.Fingering.annular, 4: m.Fingering.little}
 
+# per plan bend_kind (exercise.BEND_SHAPES): the GP bend type and its points (position, quarter tones)
+BEND_TYPES = {"bend": m.BendType.bend, "prebend": m.BendType.prebend, "release": m.BendType.prebendRelease}
+BEND_POINTS = {"bend": ((0, 0), (1, 0), (2, 2), (12, 2)),
+               "prebend": ((0, 2), (12, 2)),
+               "release": ((0, 2), (1, 2), (2, 0), (12, 0))}
 
-def half_step_bend() -> m.BendEffect:
-    return m.BendEffect(type=m.BendType.bend, value=50,
-                        points=[m.BendPoint(0, 0), m.BendPoint(3, 2), m.BendPoint(12, 2)])
+
+def half_step_bend(kind: str) -> m.BendEffect:
+    return m.BendEffect(type=BEND_TYPES[kind], value=50,
+                        points=[m.BendPoint(pos, val) for pos, val in BEND_POINTS[kind]])
 
 
 def _duration(b: dict) -> m.Duration:
@@ -69,10 +79,11 @@ def write_gp5(plan: list[dict], out: str, *, title: str, subtitle: str = "", tem
                 beat.status = m.BeatStatus.rest
             else:
                 beat.status = m.BeatStatus.normal
-                note = m.Note(beat, value=b["fret"], string=b["string"], type=m.NoteType.normal)
-                if b["bend"]:
+                note = m.Note(beat, value=b["fret"], string=b["string"],
+                              type=m.NoteType.tie if b["tie"] else m.NoteType.normal)
+                if b["bend_kind"]:
                     assert b["bend"] == 2, "only half-step bends are supported"
-                    note.effect.bend = half_step_bend()
+                    note.effect.bend = half_step_bend(b["bend_kind"])
                 if fingering:
                     note.effect.leftHandFinger = _FINGER[b["finger"]]
                 beat.notes.append(note)
@@ -105,9 +116,10 @@ def read_plan_shape(path: str) -> dict:
                  "tuplet": [t.enters, t.times], "status": b.status.name, "notes": []}
             for n in b.notes:
                 bend = n.effect.bend
-                d["notes"].append({"string": n.string, "fret": n.value,
+                d["notes"].append({"string": n.string, "fret": n.value, "tie": n.type == m.NoteType.tie,
                                    "bend": max((p.value for p in bend.points), default=0) if bend else 0,
                                    "bend_type": bend.type.name if bend else None,
+                                   "bend_points": [(p.position, p.value) for p in bend.points] if bend else [],
                                    "finger": n.effect.leftHandFinger.value,
                                    "velocity": n.velocity})
             beats.append(d)

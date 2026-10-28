@@ -10,6 +10,7 @@ from fractions import Fraction
 
 from .boxes import Box
 from .patterns import Pattern, get_pattern
+from .theory import note_name
 
 BAR_BEATS = Fraction(4)
 
@@ -164,9 +165,28 @@ def build_bars(sections: list[Section], n: int) -> list[Bar]:
     return [b for k, sec in enumerate(sections) for b in section_bars(sec, n, k)]
 
 
-def realize(bars: list[Bar], box: Box, *, bend_blue: bool = False, marker_fmt: str = "{label}") -> list[dict]:
+# A bent note: half steps above its fret's own pitch at the start and at the end of the note.
+#   bend     starts on the fret's pitch and rises a half step early in the note, then holds
+#   prebend  picked already bent up a half step, held
+#   release  starts bent up a half step and comes back to the fret's pitch early in the note, then holds
+BEND_SHAPES = {"bend": (0, 1), "prebend": (1, 1), "release": (1, 0)}
+
+
+def ends_bent(b: dict) -> bool:
+    return not b["rest"] and b["bend_kind"] is not None and BEND_SHAPES[b["bend_kind"]][1] == 1
+
+
+def realize(bars: list[Bar], box: Box, *, bend_blue: bool = False, one_pick_bends: bool = False,
+            marker_fmt: str = "{label}") -> list[dict]:
     """Concrete plan: per bar {section, section_index, marker, double_bar, ts, beats:[{rest, dur, value,
-    tuplet, idx, string, fret, bend, pitch, finger, role}]}. bend: quarter tones (2 = half step)."""
+    tuplet, idx, string, fret, bend, bend_kind, tie, pitch, finger, role}]}. idx and pitch are the box
+    note that sounds at the end of the beat; bend: quarter tones (2 = half step, 0 = none); bend_kind:
+    None or a key of BEND_SHAPES; tie: the note is not picked, it continues the note before it.
+
+    bend_blue: every blue note is picked on the fret below and bent up (bend_kind "bend").
+    one_pick_bends: each blue note is bent in its box.bend_pairs() pair, one pick per bend (_one_pick)."""
+    if bend_blue and one_pick_bends:
+        raise ValueError("use one of bend_blue or one_pick_bends, not both")
     blue = set(box.blue_indices()) if bend_blue else set()
     plan = []
     for b in bars:
@@ -178,11 +198,73 @@ def realize(bars: list[Bar], box: Box, *, bend_blue: bool = False, marker_fmt: s
                 p = box.positions[e.idx]
                 if e.idx in blue:
                     src = box.bend_source(e.idx)
-                    d.update(string=src.string, fret=src.fret, bend=2, finger=src.finger, pitch=p.pitch)
+                    d.update(string=src.string, fret=src.fret, bend=2, bend_kind="bend", tie=False,
+                             finger=src.finger, pitch=p.pitch)
                 else:
-                    d.update(string=p.string, fret=p.fret, bend=0, finger=p.finger, pitch=p.pitch)
+                    d.update(string=p.string, fret=p.fret, bend=0, bend_kind=None, tie=False,
+                             finger=p.finger, pitch=p.pitch)
             beats.append(d)
         plan.append({"section": b.section, "section_index": b.section_index,
                      "marker": marker_fmt.format(label=b.section, shape=box.label) if b.first else None,
                      "double_bar": b.last, "ts": list(b.ts), "beats": beats})
+    if one_pick_bends:
+        sections: dict[int, list[dict]] = {}
+        for bar in plan:
+            sections.setdefault(bar["section_index"], []).extend(bar["beats"])
+        for beats in sections.values():  # a tie never crosses a section's double bar
+            _one_pick(beats, box)
+        _refuse_unplayable(plan, box)
     return plan
+
+
+def _one_pick(beats: list[dict], box: Box) -> None:
+    """Rewrite one section's beats so that each bend pair is played with one pick: going up (lower
+    note, then upper), the upper note is the lower one's fret tied and bent up; going down (upper,
+    then lower), the upper note is a picked pre-bend on that fret -- or the bend of the way up, at the
+    top -- and the lower note is tied and released."""
+    pairs = box.bend_pairs()
+    up = {(p.lower, p.upper): p for p in pairs}
+    down = {(p.upper, p.lower): p for p in pairs}
+
+    def bent(b: dict, p, kind: str, tie: bool) -> None:
+        b.update(string=p.string, fret=p.fret, finger=p.finger, bend=2, bend_kind=kind, tie=tie)
+
+    for a, b in zip(beats, beats[1:]):
+        if a["rest"] or b["rest"]:
+            continue
+        if (a["idx"], b["idx"]) in up:
+            bent(b, up[a["idx"], b["idx"]], "bend", tie=True)
+        elif (a["idx"], b["idx"]) in down:
+            p = down[a["idx"], b["idx"]]
+            if a["bend_kind"] is None:
+                bent(a, p, "prebend", tie=False)
+            bent(b, p, "release", tie=True)
+
+
+def _refuse_unplayable(plan: list[dict], box: Box) -> None:
+    """ValueError where the one-pick rewrite cannot be played as written: an upper note with no lower
+    note beside it (it would need its own fret), a held bend picked again, or a pre-bend right after a
+    note on its own string (that string is still sounding, so it cannot be bent silently first). Only
+    a rest separates two notes; a section's double bar does not."""
+    def name(i: int) -> str:
+        return note_name(box.positions[i].pitch)
+
+    lower_of = {p.upper: p.lower for p in box.bend_pairs()}
+    beats = [(k, j, b) for k, bar in enumerate(plan, 1) for j, b in enumerate(bar["beats"], 1)]
+    problems = []
+    for n, (k, j, b) in enumerate(beats):
+        if b["rest"]:
+            continue
+        where = f"{name(b['idx'])} at bar {k} beat {j}"
+        if b["idx"] in lower_of and not ends_bent(b):
+            problems.append(f"{where} has no {name(lower_of[b['idx']])} next to it to bend from or into")
+        a = beats[n - 1][2] if n else None
+        if a is None or a["rest"] or b["tie"]:
+            continue
+        if ends_bent(a) and (a["string"], a["fret"]) == (b["string"], b["fret"]):
+            problems.append(f"{where} would pick the bend held from the note before it again")
+        elif b["bend_kind"] == "prebend" and a["string"] == b["string"]:
+            problems.append(f"{where} is a pre-bend right after a note on the same string")
+    if problems:
+        raise ValueError("one pick per bend is not possible in this pattern on the "
+                         f"{box.label}: " + "; ".join(problems))

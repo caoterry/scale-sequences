@@ -2,8 +2,9 @@
 
 A [Claude Code](https://code.claude.com) skill that writes **Guitar Pro `.gp5` practice files of scale
 sequences** -- 3s, 4s (1234), 1231, neighbour-note triplets, 6s, thirds, the plain scale -- played
-through a **scale box** (shape / position), in any key, optionally with every blue note played as a
-**half-step bend**. Ask for an exercise in plain words; you get a file you can open, loop and slow
+through a **scale box** (shape / position), in any key, optionally with the blue notes played as
+**half-step bends** -- for the plain scale with **one pick per bend**, the way the bends are played.
+Ask for an exercise in plain words; you get a file you can open, loop and slow
 down in any Guitar Pro or alphaTab-based player, and the skill refuses to hand over a file it could
 not verify.
 
@@ -25,15 +26,19 @@ options; scripts build every note and check it:
    box to box is only which string and fret each index is.
 3. **The plan is checked** before anything is written: every bar adds up to its time signature;
    every note is a position of the box (or the fret below a blue note, for a bend) and sounds the
-   box's note; bends are on exactly the blue notes when you ask for them and nowhere otherwise; each
-   section's note order equals the pattern's index stream; rhythm per role (pickup, line, landing)
-   is as specified; rests appear only after the line.
-4. **The file is read back** with pyguitarpro and must equal the plan beat by beat.
-5. **alphaTab parses and renders it.** [alphaTab](https://alphatab.net) (a real Guitar Pro engine,
-   the one many web players use) loads the file in Node; its own reading must equal the plan -- bars,
-   time signatures, markers, every beat's duration and tuplet, every note's string, fret and
-   sounding pitch including the bend -- and the rendered score must show a ½ bend label on exactly
-   the bent notes.
+   box's note; bends are where the chosen bend mode puts them and nowhere else (with one pick per
+   bend: every tie continues the note before it, every pre-bend is released, no bend is picked
+   again, the bent-to note's own fret is never played); each section's note order equals the
+   pattern's index stream; rhythm per role (pickup, line, landing) is as specified; rests appear
+   only after the line.
+4. **The file is read back** with pyguitarpro and must equal the plan beat by beat, ties and bend
+   points included.
+5. **alphaTab parses, plays and renders it.** [alphaTab](https://alphatab.net) (a real Guitar Pro
+   engine, the one many web players use) loads the file in Node; its own reading must equal the plan
+   -- bars, time signatures, markers, every beat's duration and tuplet, every note's string, fret,
+   tie, bend shape (kept as written) and pitch. The MIDI its player generates must have one note-on
+   per pick, and each bend must reach its pitch within 1/6 of the note and hold it. The rendered
+   score must show a ½ bend label on exactly the notes that bend up or are pre-bent.
 
 Any failed check exits with an error and leaves no file behind; an existing file is never
 overwritten unless you ask.
@@ -89,6 +94,7 @@ In Claude Code, just ask:
 > give me the 4s sequence through the root shape of A minor blues, eighth notes, 80 bpm
 > transfer the 1234 sequence to the b3 shape
 > add half-step bends on the blue notes
+> the A minor blues scale through the root shape, half-step bends, one pick per bend
 > same thing in E instead of A
 > 3s in triplets and 6s in sextuplets through the b7 shape, at 70 bpm
 > the 1231 sequence in all three boxes, with and without bends
@@ -98,16 +104,16 @@ Then open the `.gp5` in Guitar Pro or any alphaTab-based player -- for example, 
 [woodshed-web.fly.dev](https://woodshed-web.fly.dev) (free; plays, loops and slows down; no account
 needed to play).
 
-What a run prints (here "transfer the 1234 sequence to the b3 shape" with "half-step bends on the blue
-notes"):
+What a run prints (here "the A minor blues scale through the root shape, half-step bends, one pick
+per bend", at 70 bpm):
 
 ```
-OK 1234 - b3 shape, half-step bends.gp5
-  b3 shape (A), 12 bars, 96 notes, 16 half-step bends
-  4s: 4s in 8, 12 bars, 96 notes
-  check plan (bar fill, pitch class, in-box, bends, pattern, rhythm): ok
+OK scale - root shape, one-pick half-step bends.gp5
+  root shape (A), 7 bars, 27 notes, 23 picks, 4 half-step bends (2 released)
+  scale: scale in 4, 7 bars, 27 notes
+  check plan (bar fill, pitch class, in-box, bends, one pick per bend, pattern, rhythm): ok
   check read-back (pyguitarpro) exact: ok
-  check alphaTab parse + render (bend labels): ok
+  check alphaTab parse + MIDI (picks, bend timing) + render (bend labels): ok
 ```
 
 You can also run the script yourself (`--help` on each command):
@@ -117,6 +123,7 @@ S=skills/scale-sequences/scripts/scaleseq_cli.py
 uv run --locked --script $S boxes --key E            # box diagrams: scale degree / suggested finger
 uv run --locked --script $S patterns                 # the pattern library in index notation
 uv run --locked --script $S generate --box b3 --patterns 1234 --bend-blue-notes -o b3-1234.gp5
+uv run --locked --script $S generate --box root --patterns scale:4 --one-pick-bends -o root-scale.gp5
 uv run --locked --script $S generate --box root --patterns 3s:8t,6s:16s --tempo 70 -o root.gp5
 uv run --locked --script $S generate --box b7 --patterns 1231,thirds --key E -o b7-E.gp5
 ```
@@ -125,10 +132,25 @@ Options: `--box b7|root|b3`; `--key E` (lowest placement with no open strings) o
 `--patterns name[:rhythm],...` (one section per pattern, in that order, each with its own marker) with
 rhythms `1 2 4 8 16 4t 8t 16t 16s` (t = triplet, 16s = sextuplet) -- a pattern may appear more than
 once, e.g. `3s:8t,3s:16s`, and its markers then name the rhythm ("3s in eighth triplets", "3s in
-sextuplets"); `--bend-blue-notes`; `--tempo`; `--title`; `--fingering` (writes the suggested
+sextuplets"); `--one-pick-bends` or `--bend-blue-notes` (see "Half-step bends" below); `--tempo`; `--title`; `--fingering` (writes the suggested
 left-hand fingers; off by default because it adds numbers to the notation staff); `--force` to replace
 an existing file; `--json` for a machine-readable report; `--pattern-file FILE` for patterns of your
 own (see below).
+
+### Half-step bends
+
+- `--one-pick-bends` plays each half-step bend with **one pick**. Going up, you pick the lower note,
+  and a tied note bends it up into the next scale note. Going down, you pick a pre-bend (it sounds
+  the upper note), and a tied note releases it into the next one. Which two notes share a fret comes
+  from the box's fingering. If the blue note's string holds D-D#-E on adjacent frets (fingers 1-2-3),
+  the middle finger bends D# up to E and E's own fret is never played; otherwise the ring finger
+  bends D up to D#. The index and little fingers never bend. Every scale note keeps its own beat.
+  This needs every bent-to note next to the note it is bent from, no held bend picked again and no
+  pre-bend right after a note on its own string. On the built-in boxes that is the plain `scale`
+  pattern (e.g. `--patterns scale:4`). Any other pattern is refused, with the notes that cannot be
+  played that way named.
+- `--bend-blue-notes` writes every blue note as the fret below, bent up, and picks every note. In
+  sequences that is a bend every few notes, each picked again.
 
 ### Patterns
 
@@ -149,15 +171,18 @@ N = number of notes in the box; groups are written with box indices, 0 = lowest 
 
 | | |
 |---|---|
-| **Checked against the box and pattern definitions** | every note is a box position and sounds the box's pitch; pitch classes are in the scale; each section plays the pattern's exact index order; bends on exactly the blue notes |
+| **Checked against the box and pattern definitions** | every note is a box position and sounds the box's pitch; pitch classes are in the scale; each section plays the pattern's exact index order; bends exactly where the bend mode puts them (one pick per bend: ties, pre-bends and releases follow the bend pairs) |
 | **Checked by arithmetic** | every bar adds up to its time signature; rhythm per role; rests only after the line; markers and double bars on the right bars |
-| **Checked against two independent parsers** | the written file, read back by pyguitarpro and by alphaTab, equals the plan beat by beat (duration, tuplet, rest, string, fret, sounding pitch incl. bend, bars, time signatures, markers, title, tempo) |
-| **Checked in a render** | alphaTab's rendered score has a ½ bend label on exactly the bent notes |
-| **Not checked** | how it sounds (playback audio); how a player's own re-saved copy looks; whether the suggested fingering suits your hand |
+| **Checked against two independent parsers** | the written file, read back by pyguitarpro and by alphaTab, equals the plan beat by beat (duration, tuplet, rest, string, fret, tie, bend type and points, sounding pitch incl. bend, bars, time signatures, markers, title, tempo) |
+| **Checked in alphaTab's MIDI** | one note-on per pick at the right tick and key, held through its tied notes; every bend and release reaches its pitch within 1/6 of the note and holds it |
+| **Checked in a render** | alphaTab's rendered score has a ½ bend label on exactly the notes that bend up or are pre-bent |
+| **Not checked** | how it sounds (playback audio; the MIDI events are checked, not the sound); how a player's own re-saved copy looks; whether the suggested fingering suits your hand |
 
 The test suite also regenerates small exercises written out by hand from the pattern definitions
-(e.g. 4s on a 6-note box, string and fret for every note), and checks that the comparisons against a
-reference catch a wrong fret, a wrong rhythm and a missing bar.
+(e.g. 4s on a 6-note box, string and fret for every note), and the one-pick-bend scale on each built-in
+box written out by hand beat by beat (fret, tie, bend). It checks that the comparisons against a
+reference catch a wrong fret, a wrong rhythm and a missing bar, and that the alphaTab MIDI check
+catches a bend that ramps across the whole note.
 
 ## Scope / limitations
 
@@ -167,8 +192,10 @@ reference catch a wrong fret, a wrong rhythm and a missing bar.
   scale run is refused. The scales it knows are minor and major blues, minor and major pentatonic,
   natural minor and major; besides the built-in boxes, only a minor pentatonic box is covered by the
   tests.
-- Bends: only half-step bends, only on the blue note (b5), only when the box has the fret below on
-  the same string (otherwise the run stops with an error). No pre-bends or releases.
+- Bends: only half-step bends, only around the blue note (b5), only when the box has the fret below
+  on the same string (otherwise the run stops with an error). With one pick per bend, only patterns
+  where every bent-to note is next to the note it is bent from (on the built-in boxes, the plain
+  scale), and only bends with the middle or ring finger.
 - Every sequence ends on the box's lowest note (index 0), so the index pattern stays identical across
   boxes; on the b7 and b3 shapes that is not the root (G and C in A).
 - The key signature is the root's major key (A minor blues: three sharps), as blues charts are
@@ -182,7 +209,7 @@ If you have an exercise as reads of a page (a TAB read and a staff read in the f
 described in `compare_reads` in `skills/scale-sequences/scripts/scaleseq/verify.py`),
 `analyze --box <box> --reads DIR` names the library patterns that reproduce each section. Then
 `generate --expect-reads DIR`, or `--expect-gp5 FILE` for an exercise you have as a `.gp5`, fails
-unless the result is identical (against a `.gp5`, only bent blue notes may differ). Prove a pattern on
+unless the result is identical (against a `.gp5`, only the notes the run bends may differ). Prove a pattern on
 the box the reference is in before transferring it to another box.
 
 If no library pattern matches, define the one you need in a JSON pattern file of your own, kept next
