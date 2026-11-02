@@ -25,7 +25,7 @@ def test_rest_fill(pos, unit, want):
     assert pos + sum(d.beats for d in got) == 4
 
 
-@pytest.mark.parametrize("box_id", ["b7", "root", "b3"])
+@pytest.mark.parametrize("box_id", ["b7", "root", "b3", "4", "5"])
 @pytest.mark.parametrize("name", list(PATTERNS))
 @pytest.mark.parametrize("rhythm", ["8", "8t", "16", "16s"])
 @pytest.mark.parametrize("bend", [False, True])
@@ -53,13 +53,14 @@ MIXED = [Section("neighbor3", "neighbor3", note="16"), Section("thirds", "thirds
          Section("upper-neighbor3", "upper-neighbor3", note="8t")]
 
 
-# root/b7 boxes have 14 notes, b3 has 15. On 14 notes: neighbor3 in sixteenths = 1/8 pickup bar, then
+# root/b7/5 boxes have 14 notes, b3/4 have 15. On 14 notes: neighbor3 in sixteenths = 1/8 pickup bar, then
 # 13 groups up + 12 down = 75 sixteenths = 18.75 beats, landing quarter on beat 20 -> 1 + 5 bars;
 # thirds in eighths: 12 + 12 pairs = 48 eighths = 6 bars; 4s in sixteenths: 11 + 11 groups = 88
 # sixteenths = 22 beats -> 6 bars; 6s in sextuplets: 9 + 9 groups = 108 x 1/6 beat = 18 beats -> 5 bars;
 # upper-neighbor3 in triplet eighths: 13 + 12 groups = 75 x 1/3 beat = 25 beats -> 7 bars.
 @pytest.mark.parametrize("bid,counts", [("root", [6, 6, 6, 5, 7]), ("b7", [6, 6, 6, 5, 7]),
-                                        ("b3", [7, 7, 6, 5, 7])])
+                                        ("b3", [7, 7, 6, 5, 7]), ("4", [7, 7, 6, 5, 7]),
+                                        ("5", [6, 6, 6, 5, 7])])
 def test_multi_section_bar_counts(bid, counts):
     box = get_box(bid)
     bars = build_bars(MIXED, box.n)

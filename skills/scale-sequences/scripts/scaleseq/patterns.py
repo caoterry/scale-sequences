@@ -14,10 +14,13 @@ One model covers every pattern here:
 
 Index notation used in docs/reports: groups written with 0-based box indices, e.g. 4s = [0123][1234]...
 
-The built-in patterns use shape, turn_last and pickup only; desc_stop and desc_skip are there for a
-pattern the user defines to reproduce an exercise they already have. Such a pattern lives in a pattern
-file of the user's own, outside this skill, and is added for one run (`--pattern-file`, add_patterns);
-it is never added to the library below (see SKILL.md, "Transferring an exercise").
+Group i is the group built on box note i: G(i) = [i + o for o in shape] (for every built-in pattern,
+the group whose lowest note is box index i). The built-in patterns use shape, turn_last and pickup
+only. desc_stop and desc_skip are set per section of a file (`stop=N` and `skip=N[+N...]` in
+--patterns, Section.desc_stop / Section.desc_skip; see exercise.Section), or by a pattern the user
+defines to reproduce an exercise they already have. Such a pattern lives in a pattern file of the
+user's own, outside this skill, and is added for one run (`--pattern-file`, add_patterns); it is never
+added to the library below (see SKILL.md, "Transferring an exercise").
 """
 
 from __future__ import annotations
@@ -36,8 +39,8 @@ class Pattern:
     about: str
     turn_last: int | None = None      # top ascending group: last note -> i + turn_last
     repeat_top: bool | None = None    # None: repeat the top group in the descent unless palindrome
-    desc_stop: int = 0                # lowest group index i played in the descent
-    desc_skip: tuple[int, ...] = ()   # descent group indices i left out
+    desc_stop: int = 0                # the descent ends at group desc_stop (0 = at the bottom)
+    desc_skip: tuple[int, ...] = ()   # groups the descent leaves out
     pickup: tuple[int, ...] = ()
     land: bool = True                 # append index 0 if the line does not end there
     default_rhythm: str = "8"
@@ -45,7 +48,7 @@ class Pattern:
 
     def top(self, n: int) -> int:
         t = n - 1 - max(self.shape)
-        if t < max(self.desc_stop, 0) or min(self.shape) < 0:
+        if t < 0 or min(self.shape) < 0:
             raise ValueError(f"pattern {self.name}: box of {n} notes is too small")
         return t
 
@@ -63,8 +66,7 @@ class Pattern:
             up[-1] = up[-1][:-1] + [top + self.turn_last]
         repeat = (not self.is_palindrome()) if self.repeat_top is None else self.repeat_top
         first_down = top if repeat else top - 1
-        down = [list(reversed(self.group(i))) for i in range(first_down, self.desc_stop - 1, -1)
-                if i not in self.desc_skip]
+        down = [list(reversed(self.group(i))) for i in self._descent_groups(n, top, first_down)]
         line = [x for g in up + down for x in g]
         land = [[0]] if (self.land and line and line[-1] != 0) else []
         out = {"pickup": [list(self.pickup)] if self.pickup else [], "up": up, "down": down, "land": land}
@@ -73,6 +75,23 @@ class Pattern:
                 if any(x < 0 or x >= n for x in g):
                     raise ValueError(f"pattern {self.name}: {k} group {g} outside a box of {n} notes")
         return out
+
+    def _descent_groups(self, n: int, top: int, first_down: int) -> list[int]:
+        """The groups the descent plays, top down: first_down .. desc_stop, desc_skip left out (possibly
+        none: a line that only goes up). ValueError if desc_stop or desc_skip name a group the descent
+        does not have."""
+        if self.desc_stop > top:
+            raise ValueError(f"pattern {self.name}: the descent cannot stop at group {self.desc_stop}: "
+                             f"on a box of {n} notes its groups are 0 to {top}")
+        played = range(first_down, self.desc_stop - 1, -1)
+        for g in self.desc_skip:
+            if g not in played:
+                plays = f"groups {first_down} down to {self.desc_stop}" if played else "no group"
+                both_ways = " reads the same both ways and" if self.is_palindrome() else ""
+                once = f" (its top group{both_ways} is played once, on the way up)" if g == top > first_down else ""
+                raise ValueError(f"pattern {self.name}: group {g} is not in the descent: on a box of {n} "
+                                 f"notes it plays {plays}{once}")
+        return [i for i in played if i not in self.desc_skip]
 
     def stream(self, n: int) -> list[int]:
         s = self.sections(n)

@@ -6,11 +6,20 @@ from scaleseq.boxes import BoxError, get_box
 from scaleseq.theory import note_name, scale_pcs
 
 
-@pytest.mark.parametrize("bid,n,lowest,blue_sources", [
+BUILT_IN = [
     ("b7", 14, (6, 3), [(5, 5), (2, 3)]),
     ("root", 14, (6, 5), [(5, 5), (3, 7)]),
     ("b3", 15, (6, 8), [(6, 10), (3, 7), (1, 10)]),
-])
+    ("4", 15, (6, 10), [(6, 10), (4, 12), (1, 10)]),
+    ("5", 14, (6, 12), [(4, 12), (2, 15)]),
+]
+
+
+def test_every_built_in_box_is_tested():
+    assert sorted(boxes.ALIASES[bid] for bid, *_ in BUILT_IN) == sorted(boxes.BOX_SPECS)
+
+
+@pytest.mark.parametrize("bid,n,lowest,blue_sources", BUILT_IN)
 def test_builtin_boxes_are_gap_free_scale_runs(bid, n, lowest, blue_sources):
     box = get_box(bid)
     assert box.n == n

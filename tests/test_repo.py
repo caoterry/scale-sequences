@@ -40,3 +40,12 @@ def test_plugin_manifests_agree():
     assert plugin["name"] == "scale-sequences" and plugin["license"] == "MIT"
     assert [p["name"] for p in market["plugins"]] == [plugin["name"]]
     assert (REPO / "skills" / plugin["name"] / "SKILL.md").is_file()
+
+
+def test_the_changelog_names_the_plugin_version():
+    """README's changelog has a line for the version plugin.json declares, and SKILL.md names it."""
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    readme = (REPO / "README.md").read_text()
+    assert "\n## Changelog\n" in readme
+    assert f"\n- {version} -- " in readme.split("\n## Changelog\n", 1)[1]
+    assert f"\nVersion {version}: " in (REPO / "skills" / "scale-sequences" / "SKILL.md").read_text()

@@ -8,9 +8,9 @@ Ask for an exercise in plain words; you get a file you can open, loop and slow
 down in any Guitar Pro or alphaTab-based player, and the skill refuses to hand over a file it could
 not verify.
 
-Built in: the three A minor blues boxes named after the scale degree of their lowest note on the
-low E string -- the **b7 shape** (frets 2-6), the **root shape** (5-8) and the **b3 shape** (7-11) --
-each transposable to any key.
+Built in: the five A minor blues boxes named after the scale degree of their lowest note on the
+low E string -- the **b7 shape** (frets 2-6), the **root shape** (5-8), the **b3 shape** (7-11), the
+**4 shape** (9-13) and the **5 shape** (12-16) -- each transposable to any key.
 
 ## Why you can trust the files
 
@@ -97,7 +97,9 @@ In Claude Code, just ask:
 > the A minor blues scale through the root shape, half-step bends, one pick per bend
 > same thing in E instead of A
 > 3s in triplets and 6s in sextuplets through the b7 shape, at 70 bpm
-> the 1231 sequence in all three boxes, with and without bends
+> the 1231 sequence in all five boxes, with and without bends
+> 3s through the 5 shape, but only come back down as far as group 3
+> thirds through the 4 shape, leaving groups 2 and 5 out on the way down
 ```
 
 Then open the `.gp5` in Guitar Pro or any alphaTab-based player -- for example, drag it into
@@ -126,11 +128,13 @@ uv run --locked --script $S generate --box b3 --patterns 1234 --bend-blue-notes 
 uv run --locked --script $S generate --box root --patterns scale:4 --one-pick-bends -o root-scale.gp5
 uv run --locked --script $S generate --box root --patterns 3s:8t,6s:16s --tempo 70 -o root.gp5
 uv run --locked --script $S generate --box b7 --patterns 1231,thirds --key E -o b7-E.gp5
+uv run --locked --script $S generate --box 5 --patterns 3s:8t:stop=3,thirds:16:skip=2+5 -o 5-shape.gp5
 ```
 
-Options: `--box b7|root|b3`; `--key E` (lowest placement with no open strings) or `--fret-offset N`;
-`--patterns name[:rhythm],...` (one section per pattern, in that order, each with its own marker) with
-rhythms `1 2 4 8 16 4t 8t 16t 16s` (t = triplet, 16s = sextuplet) -- a pattern may appear more than
+Options: `--box b7|root|b3|4|5`; `--key E` (lowest placement with no open strings) or `--fret-offset N`;
+`--patterns name[:rhythm][:stop=N][:skip=N[+N...]],...` (one section per pattern, in that order, each
+with its own marker) with rhythms `1 2 4 8 16 4t 8t 16t 16s` (t = triplet, 16s = sextuplet) and the
+descent options `stop` and `skip` (see "Changing the way down" below) -- a pattern may appear more than
 once, e.g. `3s:8t,3s:16s`, and its markers then name the rhythm ("3s in eighth triplets", "3s in
 sextuplets"); `--one-pick-bends` or `--bend-blue-notes` (see "Half-step bends" below); `--tempo`; `--title`; `--fingering` (writes the suggested
 left-hand fingers; off by default because it adds numbers to the notation staff); `--force` to replace
@@ -167,6 +171,28 @@ N = number of notes in the box; groups are written with box indices, 0 = lowest 
 | `thirds` | `[0,2] [1,3] ...` | `[N-1,N-3] ... [2,0]` |
 | `scale` | `0 1 2 ... N-1` | `N-2 ... 0` |
 
+### Changing the way down: `stop` and `skip`
+
+Every pattern is a chain of groups, numbered from the bottom of the box starting at 0: group N is the
+group built on box note N (in 3s, group 3 is `[3,4,5]` going up and `[5,4,3]` coming down). Two options,
+written after the rhythm, change the descent of one section without defining a new pattern:
+
+- `stop=N` ends the descent at group N instead of the bottom group. The line then drops to the box's
+  lowest note (a quarter note) to finish. Use it to work the upper part of the box on the way down, or
+  to keep a long sequence short.
+- `skip=N` leaves group N out of the descent (several: `skip=N+M`). Coming down, the line goes from
+  the group above straight to the group below -- a jump that breaks the sequence's regular step, to
+  vary a run you know by heart.
+
+For example `--patterns 3s:8t:stop=3,thirds:16:skip=2+5` writes 3s in triplets that come down only
+to group 3 (`... [6,5,4] [5,4,3]`, then `[0]`), then thirds in sixteenths without `[4,2]` and `[7,5]` on
+the way down. Each section's marker names its options ("3s stop=3 (5 shape)"). `patterns --n <box
+size>` lists every pattern's groups, and `--json` reports each section's groups as played
+(`index_notation`). A group the descent does not have -- above the top of the box, below the `stop`, or
+a top group that reads the same both ways (played once, on the way up) -- is refused, with the groups
+the descent does play named. In Python: `Section(label, pattern, note=..., desc_stop=N,
+desc_skip=(N, M))` (`skills/scale-sequences/scripts/scaleseq/exercise.py`).
+
 ## What is verified, and what is not
 
 | | |
@@ -187,7 +213,7 @@ catches a bend that ramps across the whole note.
 ## Scope / limitations
 
 - Standard tuning, 6-string guitar, one track, 4/4 (a pickup gets a bar of its own).
-- Three built-in boxes, all minor blues (A, transposable). Any other box needs an entry in
+- Five built-in boxes, all minor blues (A, transposable). Any other box needs an entry in
   `BOX_SPECS` (`skills/scale-sequences/scripts/scaleseq/boxes.py`); a box that is not a gap-free
   scale run is refused. The scales it knows are minor and major blues, minor and major pentatonic,
   natural minor and major; besides the built-in boxes, only a minor pentatonic box is covered by the
@@ -197,7 +223,7 @@ catches a bend that ramps across the whole note.
   where every bent-to note is next to the note it is bent from (on the built-in boxes, the plain
   scale), and only bends with the middle or ring finger.
 - Every sequence ends on the box's lowest note (index 0), so the index pattern stays identical across
-  boxes; on the b7 and b3 shapes that is not the root (G and C in A).
+  boxes; on the b7, b3, 4 and 5 shapes that is not the root (G, C, D and E in A).
 - The key signature is the root's major key (A minor blues: three sharps), as blues charts are
   usually printed.
 - alphaTab-based players draw a default "f" dynamic at the first note; the file itself writes no
@@ -212,6 +238,8 @@ described in `compare_reads` in `skills/scale-sequences/scripts/scaleseq/verify.
 unless the result is identical (against a `.gp5`, only the notes the run bends may differ). Prove a pattern on
 the box the reference is in before transferring it to another box.
 
+A section that differs from a library pattern only in its way down may need just `stop` or `skip`
+(see "Changing the way down"); `analyze` matches the library patterns as they are, without options.
 If no library pattern matches, define the one you need in a JSON pattern file of your own, kept next
 to your reference rather than in the skill, and pass it with `--pattern-file` (to `generate`,
 `analyze` and `patterns`):
@@ -222,18 +250,19 @@ to your reference rather than in the skill, and pass it with `--pattern-file` (t
 
 Each entry takes the fields of `Pattern` in `skills/scale-sequences/scripts/scaleseq/patterns.py`:
 `shape` (required) and optionally `turn_last`, `repeat_top`, `desc_stop`, `desc_skip`, `pickup`,
-`land`, `default_rhythm`, `about` and `aliases`, with lists for its tuple fields. A name that is
-already in the library, an unknown field or a wrong type is refused. The patterns are added for that
-run only; nothing is written into the skill.
+`land`, `default_rhythm`, `about` and `aliases`, with lists for its tuple fields (`desc_stop` and
+`desc_skip` are what `stop` and `skip` set; a section's option replaces the pattern's own value). A
+name that is already in the library, an unknown field or a wrong type is refused. The patterns are
+added for that run only; nothing is written into the skill.
 
 ## Copyright
 
 The repository contains no third-party music: the boxes are scale positions, the patterns are
 generic practice sequences, and every exercise is generated from them. If you check a pattern
 against a transcription of a book you own, keep that transcription -- and what reproduces it: the
-`--patterns` list with its rhythms and any pattern you defined for it (your `--pattern-file`) --
-outside the repository; `tests/private_reference.py` reads them from the directory named in an
-environment variable for exactly that reason.
+`--patterns` list with its rhythms and options and any pattern you defined for it (your
+`--pattern-file`) -- outside the repository; `tests/private_reference.py` reads them from the directory
+named in an environment variable for exactly that reason.
 
 ## Support
 
@@ -261,6 +290,13 @@ the interpreter, which downloads it if needed:
 note for note: the directory in `SCALE_SEQUENCES_PRIVATE_FIXTURE` holds the reads, the list of
 sections (patterns and rhythms) that should reproduce them and, optionally, an earlier `.gp5` to match
 byte for byte (layout in the script's docstring). Without the variable it does nothing.
+
+## Changelog
+
+- 0.3.0 -- all five A minor blues boxes (new: the 4 and 5 shapes); per-section descent options
+  `stop=N` and `skip=N[+N...]` in `--patterns`.
+- 0.2.0 -- half-step bends with one pick per bend (`--one-pick-bends`).
+- 0.1.0 -- first release: verified `.gp5` scale-sequence exercises through the b7, root and b3 shapes.
 
 ## License
 

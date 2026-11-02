@@ -18,28 +18,67 @@ class CheckFailed(RuntimeError):
     pass
 
 
+SPEC_FORM = "pattern[:rhythm][:stop=N][:skip=N[+N...]]"
+OPTIONS = "stop=N, skip=N[+N...]"
+
+
+def _parse_options(spec: str, fields: list[str]) -> dict:
+    """The descent options of one --patterns entry: {"desc_stop": N, "desc_skip": (N, ...)} (only the ones
+    given). `fields` are the entry's ':'-separated fields after the pattern name and its rhythm."""
+    opts: dict = {}
+    for f in fields:
+        key, eq, val = (x.strip() for x in f.partition("="))
+        if not eq:
+            raise ValueError(f"{f.strip()!r} in {spec!r} is not an option; write {SPEC_FORM} "
+                             "(the rhythm right after the pattern name)")
+        if key not in ("stop", "skip"):
+            raise ValueError(f"unknown option {key!r} in {spec!r}; options: {OPTIONS}")
+        field = "desc_" + key
+        if field in opts:
+            raise ValueError(f"{key} given twice in {spec!r}")
+        nums = [x.strip() for x in val.split("+")] if key == "skip" else [val]
+        if not all(x.isascii() and x.isdigit() for x in nums):
+            want = ("a group number, 0 or more" if key == "stop"
+                    else "group numbers, 0 or more, joined by '+' (e.g. skip=2+4)")
+            raise ValueError(f"{key} needs {want}, not {val!r}, in {spec!r}")
+        opts[field] = int(val) if key == "stop" else tuple(sorted({int(x) for x in nums}))
+    return opts
+
+
+def _options_label(opts: dict) -> str:
+    out = f" stop={opts['desc_stop']}" if "desc_stop" in opts else ""
+    return out + (" skip=" + "+".join(map(str, opts["desc_skip"])) if "desc_skip" in opts else "")
+
+
 def resolve_sections(patterns: list[str]) -> list[Section]:
-    """One section per `pattern[:rhythm]` spec, in the order given. A section is labelled with its
-    pattern's name; a pattern that occurs more than once is labelled with its rhythm too ("3s in
-    eighth triplets", "3s in sextuplets"), and "#1", "#2", ... tell apart any label still repeated."""
+    """One section per --patterns entry, in the order given. An entry is `pattern[:rhythm]`, optionally
+    followed by descent options: `:stop=N` (the descent ends at group N, then lands on the box's lowest
+    note) and `:skip=N[+N...]` (the descent leaves those groups out) -- see exercise.Section.
+
+    A section is labelled with its pattern's name and its options as given ("3s", "3s stop=3"); a label
+    that occurs more than once gets the rhythm too ("3s in eighth triplets", "3s in sextuplets"), and
+    "#1", "#2", ... tell apart any label still repeated."""
     specs = []
     for spec in patterns:
-        name, _, rhythm = (x.strip() for x in spec.strip().partition(":"))
+        name, *rest = (x.strip() for x in spec.strip().split(":"))
+        rhythm = rest.pop(0) if rest and "=" not in rest[0] else ""
         p = get_pattern(name)
+        opts = _parse_options(spec.strip(), rest)
         rhythm = rhythm or p.default_rhythm
         get_dur(rhythm, where=f" in {spec.strip()!r}")
-        specs.append((p.name, rhythm))
+        specs.append((p.name, rhythm, opts))
     if not specs:
         raise ValueError("nothing to generate: give --patterns")
-    names = [name for name, _ in specs]
-    labels = [name if names.count(name) == 1 else f"{name} in {get_dur(rhythm).words}" for name, rhythm in specs]
+    bases = [name + _options_label(opts) for name, _, opts in specs]
+    labels = [base if bases.count(base) == 1 else f"{base} in {get_dur(rhythm).words}"
+              for base, (_, rhythm, _) in zip(bases, specs)]
     repeated = {label for label in labels if labels.count(label) > 1}
     seen: dict[str, int] = {}
     for k, label in enumerate(labels):
         if label in repeated:
             seen[label] = seen.get(label, 0) + 1
             labels[k] = f"{label} #{seen[label]}"
-    return [Section(label, name, note=rhythm) for label, (name, rhythm) in zip(labels, specs)]
+    return [Section(label, name, note=rhythm, **opts) for label, (name, rhythm, opts) in zip(labels, specs)]
 
 
 def check_against_reference_gp5(new: str, ref: str, plan: list[dict]) -> list[str]:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -44,16 +45,44 @@ def get_dur(key: str, where: str = "") -> Dur:
     return DURS[key]
 
 
+def _group_number(x: object) -> bool:
+    return type(x) is int and x >= 0  # not bool
+
+
 @dataclass(frozen=True)
 class Section:
+    """One section of a file: a pattern in a rhythm. desc_stop / desc_skip change where the pattern's
+    descent goes in this section only (None = as the pattern defines it). Group N is the group built on
+    box note N (patterns.Pattern), counted from 0 at the bottom of the box.
+
+    desc_stop=N  the descent ends at group N instead of coming all the way down; the line then lands on
+                 the box's lowest note (`stop=N` in --patterns)
+    desc_skip    groups the descent leaves out: coming down, the line goes from the group above each one
+                 straight to the group below it (`skip=N[+N...]` in --patterns); kept sorted, without
+                 repeats; () plays every group"""
     label: str
     pattern: str
     note: str | None = None      # rhythm of the line; None = the pattern's default
     pickup: str = "8"            # rhythm of pickup notes (if the pattern has any)
     land: str = "4"              # rhythm of the landing note (if the pattern needs one)
+    desc_stop: int | None = None
+    desc_skip: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.desc_stop is not None and not _group_number(self.desc_stop):
+            raise ValueError(f"section {self.label}: desc_stop must be a group number, 0 or more, "
+                             f"not {self.desc_stop!r}")
+        if self.desc_skip is not None:
+            if not (isinstance(self.desc_skip, (tuple, list)) and all(map(_group_number, self.desc_skip))):
+                raise ValueError(f"section {self.label}: desc_skip must be group numbers, 0 or more, "
+                                 f"not {self.desc_skip!r}")
+            object.__setattr__(self, "desc_skip", tuple(sorted(set(self.desc_skip))))
 
     def pat(self) -> Pattern:
-        return get_pattern(self.pattern)
+        """The section's pattern, with its descent options applied."""
+        p = get_pattern(self.pattern)
+        opts = {k: v for k, v in (("desc_stop", self.desc_stop), ("desc_skip", self.desc_skip)) if v is not None}
+        return dataclasses.replace(p, **opts) if opts else p
 
     def note_dur(self) -> Dur:
         return get_dur(self.note or self.pat().default_rhythm)

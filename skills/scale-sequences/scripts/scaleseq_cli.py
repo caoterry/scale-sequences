@@ -15,6 +15,11 @@
   scaleseq_cli.py analyze --box root --reads DIR [--pattern-file F]
                                                        index streams of a reference + matching patterns
 
+--patterns: one section per entry, pattern[:rhythm][:stop=N][:skip=N[+N...]]. Groups are numbered from
+0 at the bottom of the box (group N = the group built on box note N). stop=N: the descent ends at group N
+instead of coming all the way down, then the line lands on the box's lowest note. skip=N+M: the descent
+leaves groups N and M out. E.g. --patterns 3s:8t:stop=3,thirds:16:skip=2+5.
+
 --pattern-file F: a JSON file of the user's own, kept outside this skill, that defines extra patterns
 for this run only: {"<name>": {"shape": [0, 2, 1], "default_rhythm": "8t", ...}} (any field of
 scaleseq.patterns.Pattern; lists for its tuple fields).
@@ -37,10 +42,11 @@ from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir from sys.path
 
+from scaleseq.boxes import ALIASES as BOX_ALIASES  # noqa: E402
 from scaleseq.boxes import BOX_SPECS, BoxError, get_box  # noqa: E402
 from scaleseq.exercise import DURS  # noqa: E402
 from scaleseq.patterns import PATTERNS, load_pattern_file  # noqa: E402
-from scaleseq.pipeline import CheckFailed, generate, resolve_sections  # noqa: E402
+from scaleseq.pipeline import SPEC_FORM, CheckFailed, generate, resolve_sections  # noqa: E402
 
 
 def cmd_boxes(a) -> int:
@@ -60,6 +66,9 @@ def cmd_patterns(a) -> int:
         except ValueError as e:
             print(f"  {e}\n")
     print(f"rhythms: {', '.join(DURS)}  (8t = triplet eighth, 16s = sextuplet sixteenth)")
+    print("section options (after the rhythm): stop=N -- the descent ends at group N, then lands on note 0; "
+          "skip=N[+N...] -- the descent leaves those groups out. Group N = the group built on box note N.")
+    print(f"  {SPEC_FORM}, e.g. 3s:8t:stop=3 or thirds:16:skip=2+5")
     return 0
 
 
@@ -118,7 +127,7 @@ def main(argv=None) -> int:
     p.add_argument("--pattern-file", help=pattern_file_help)
     for name in ("generate", "analyze"):
         g = sub.add_parser(name)
-        g.add_argument("--box", required=True, help=f"one of {', '.join(BOX_SPECS)} (or b7/root/b3)")
+        g.add_argument("--box", required=True, help=f"one of {', '.join(BOX_SPECS)} (or {'/'.join(BOX_ALIASES)})")
         g.add_argument("--key", help="transpose to this root (lowest placement without open strings)")
         g.add_argument("--fret-offset", type=int, help="explicit transposition in frets (wins over --key)")
         g.add_argument("--pattern-file", help=pattern_file_help)
@@ -127,7 +136,9 @@ def main(argv=None) -> int:
             continue
         g.add_argument("-o", "--out", required=True)
         g.add_argument("--patterns", required=True,
-                       help="comma list of pattern[:rhythm], one section each in this order, e.g. 4s,3s:8t")
+                       help=f"comma list of {SPEC_FORM}, one section each in this order, e.g. "
+                            "4s,3s:8t,thirds:16:stop=3 (stop=N: the descent ends at group N, then lands on "
+                            "note 0; skip=N[+N...]: the descent leaves those groups out)")
         bends = g.add_mutually_exclusive_group()
         bends.add_argument("--bend-blue-notes", action="store_true",
                            help="play every blue note (b5) as a half-step bend from the fret below, each picked")

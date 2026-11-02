@@ -1,6 +1,6 @@
 {
   "name": "scale-sequences",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generate Guitar Pro .gp5 practice files of scale sequences (3s, 4s/1234, 1231, neighbour triplets, 6s, thirds) through scale boxes, transposable to any key, optionally with half-step bends on the blue notes (the plain scale with one pick per bend). Every file is checked against its plan, read back and parsed and rendered in alphaTab before it is written.",
   "author": {
     "name": "Terry Cao"

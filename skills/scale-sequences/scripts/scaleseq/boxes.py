@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from .theory import (STANDARD_TUNING, blue_pc, degree_name, fret_pitch, next_scale_pitch, note_name,
                      pitch_class, scale_pcs)
 
-# Three common A minor blues boxes, named after the scale degree of their lowest note on string 6
-# (G = b7, A = root, C = b3). Fingers 1-4 = suggested left-hand fingering. String 6 = low E ... 1 = high e.
+# The five A minor blues boxes, named after the scale degree of their lowest note on string 6
+# (G = b7, A = root, C = b3, D = 4, E = 5). Fingers 1-4 = suggested left-hand fingering. String 6 = low
+# E ... 1 = high e. A blue note (D#) is in a box where the hand reaches it from the box's position (under
+# a finger, or a fret above with the little finger), never on a stretch back below the index finger.
 BOX_SPECS = {
     "blues-b7": {
         "label": "b7 shape", "key": "A", "scale": "minor-blues",
@@ -34,8 +36,18 @@ BOX_SPECS = {
         "frets": {6: [(8, 1), (10, 3), (11, 4)], 5: [(7, 1), (10, 4)], 4: [(7, 1), (10, 4)],
                   3: [(7, 1), (8, 2), (9, 3)], 2: [(8, 1), (10, 3)], 1: [(8, 1), (10, 3), (11, 4)]},
     },
+    "blues-4": {
+        "label": "4 shape", "key": "A", "scale": "minor-blues",
+        "frets": {6: [(10, 1), (11, 2), (12, 3)], 5: [(10, 1), (12, 3)], 4: [(10, 1), (12, 3), (13, 4)],
+                  3: [(9, 1), (12, 4)], 2: [(10, 1), (13, 4)], 1: [(10, 1), (11, 2), (12, 3)]},
+    },
+    "blues-5": {
+        "label": "5 shape", "key": "A", "scale": "minor-blues",
+        "frets": {6: [(12, 1), (15, 4)], 5: [(12, 1), (15, 4)], 4: [(12, 1), (13, 2), (14, 3)],
+                  3: [(12, 1), (14, 3)], 2: [(13, 1), (15, 3), (16, 4)], 1: [(12, 1), (15, 4)]},
+    },
 }
-ALIASES = {"b7": "blues-b7", "root": "blues-root", "b3": "blues-b3"}
+ALIASES = {"b7": "blues-b7", "root": "blues-root", "b3": "blues-b3", "4": "blues-4", "5": "blues-5"}
 
 
 class BoxError(ValueError):

@@ -31,6 +31,10 @@ ONE_PICK_SCALE = {
           "1/3 2/4pb 2/4v 2/3 3/5 3/2 4/5 4/2 5/5pb 5/5v 5/3 6/5 6/3",
     "b3": "6/8 6/10 6/10^ 5/7 5/10 4/7 4/10 3/7 3/8 3/8^ 2/8 2/10 1/8 1/10 1/10^ "
           "1/10v 1/8 2/10 2/8 3/8pb 3/8v 3/7 4/10 4/7 5/10 5/7 6/10pb 6/10v 6/8",
+    "4": "6/10 6/11 6/11^ 5/10 5/12 4/10 4/12 4/12^ 3/9 3/12 2/10 2/13 1/10 1/11 1/11^ "
+         "1/11v 1/10 2/13 2/10 3/12 3/9 4/12pb 4/12v 4/10 5/12 5/10 6/11pb 6/11v 6/10",
+    "5": "6/12 6/15 5/12 5/15 4/12 4/13 4/13^ 3/12 3/14 2/13 2/15 2/15^ 1/12 1/15 "
+         "1/12 2/15pb 2/15v 2/13 3/14 3/12 4/13pb 4/13v 4/12 5/15 5/12 6/15 6/12",
 }
 KIND = {"": (False, None), "^": (True, "bend"), "pb": (False, "prebend"), "v": (True, "release")}
 
@@ -68,6 +72,8 @@ def ends_at(b) -> int:
     ("root", [(5, 6, 2, "D#", "E"), (3, 7, 3, "D", "D#")]),
     ("b7", [(5, 5, 3, "D", "D#"), (2, 4, 2, "D#", "E")]),
     ("b3", [(6, 10, 3, "D", "D#"), (3, 8, 2, "D#", "E"), (1, 10, 3, "D", "D#")]),
+    ("4", [(6, 11, 2, "D#", "E"), (4, 12, 3, "D", "D#"), (1, 11, 2, "D#", "E")]),
+    ("5", [(4, 13, 2, "D#", "E"), (2, 15, 3, "D", "D#")]),
 ])
 def test_bend_pairs_follow_the_box_fingering(bid, pairs):
     """D-D#-E on one string (fingers 1-2-3): the middle finger bends D# up to E. Otherwise the ring finger
@@ -136,7 +142,7 @@ def test_one_pick_needs_a_bent_to_note_next_to_the_note_it_bends_from():
         one_pick_plan(get_box("root"), [Section("3s", "3s")])
 
 
-@pytest.mark.parametrize("bid", ["b7", "root", "b3"])
+@pytest.mark.parametrize("bid", ["b7", "root", "b3", "4", "5"])
 @pytest.mark.parametrize("name", list(PATTERNS))
 def test_every_pattern_is_either_planned_and_checked_or_refused(bid, name):
     box = get_box(bid)
@@ -221,7 +227,8 @@ def test_the_plan_check_wants_the_mode_the_plan_was_made_in():
 
 # ---------- the file ----------
 
-@pytest.mark.parametrize("bid,picks,bends,releases", [("root", 23, 4, 2), ("b7", 23, 4, 2), ("b3", 23, 5, 3)])
+@pytest.mark.parametrize("bid,picks,bends,releases", [("root", 23, 4, 2), ("b7", 23, 4, 2), ("b3", 23, 5, 3),
+                                                      ("4", 23, 5, 3), ("5", 23, 4, 2)])
 def test_one_pick_scale_file(bid, picks, bends, releases, tmp_path):
     out = tmp_path / f"{bid}.gp5"
     rep = generate(bid, str(out), sections=SCALE, one_pick_bends=True, alphatab=alphatab_available())

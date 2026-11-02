@@ -44,7 +44,7 @@ def test_a_repeated_pattern_gets_a_label_per_section(specs, want):
     assert len({s.label for s in secs}) == len(secs)
 
 
-@pytest.mark.parametrize("box_id", ["b7", "root", "b3"])
+@pytest.mark.parametrize("box_id", ["b7", "root", "b3", "4", "5"])
 @pytest.mark.parametrize("bend", [False, True])
 def test_a_repeated_pattern_passes_the_plan_check(box_id, bend):
     box = get_box(box_id)
