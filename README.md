@@ -301,3 +301,6 @@ byte for byte (layout in the script's docstring). Without the variable it does n
 ## License
 
 MIT -- see [LICENSE](LICENSE). alphaTab, installed by `npm ci`, is MPL-2.0.
+
+---
+Made by [Terry Cao](https://github.com/caoterry) · see also: [Fender Tone Master Pro cheat sheet](https://caoterry.github.io/tmp-atlas/) (every model measured)
